@@ -1,0 +1,4 @@
+If:
+  PathMatch: \.cache/.*
+Index:
+  Background: Skip

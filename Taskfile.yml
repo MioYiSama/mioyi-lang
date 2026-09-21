@@ -6,8 +6,9 @@ tasks:
   configure:
     sources:
       - CMakeLists.txt
+      - cmake/*.cmake
     cmds:
-      - cmake --fresh -B build -G "Ninja Multi-Config" .
+      - cmake -B build -G "Ninja Multi-Config" .
     env:
       CMAKE_POLICY_VERSION_MINIMUM: 3.5
       CMAKE_EXPORT_COMPILE_COMMANDS: ON
@@ -19,3 +20,11 @@ tasks:
       - cmake --build build
     generates:
       - build/Debug/mioyi-lang
+
+  build:release:
+    deps:
+      - configure
+    cmds:
+      - cmake --build build --config Release
+    generates:
+      - build/Release/mioyi-lang
