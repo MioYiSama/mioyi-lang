@@ -1,6 +1,7 @@
 #include <any>
 #include <charconv>
 #include <cstdint>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <memory>
@@ -23,10 +24,19 @@
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/IRBuilder.h>
+#include <llvm/IR/LegacyPassManager.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Verifier.h>
+#include <llvm/MC/TargetRegistry.h>
+#include <llvm/Passes/OptimizationLevel.h>
+#include <llvm/Passes/PassBuilder.h>
+#include <llvm/Support/FileSystem.h>
+#include <llvm/Support/TargetSelect.h>
 #include <llvm/Support/raw_ostream.h>
+#include <llvm/Target/TargetMachine.h>
+#include <llvm/Target/TargetOptions.h>
+#include <llvm/TargetParser/Host.h>
 
 class SyntaxErrorListener final : public antlr4::BaseErrorListener {
 public:
@@ -695,18 +705,133 @@ private:
   std::vector<LoopTargets> loops_;
 };
 
-int main(int argc, char **argv) {
-  if (argc > 3) {
-    llvm::errs() << "usage: " << argv[0] << " [input.sy] [output.ll]\n";
-    return 1;
+struct CompilerOptions {
+  std::string input;
+  std::string output;
+  unsigned optimization = 2;
+  bool emitLLVM = false;
+};
+
+static void printUsage(const char *program) {
+  llvm::errs() << "usage: " << program
+               << " [-O0|-O1|-O2|-O3] [-c] [-S|--emit-llvm] [-o output] [input.sy]\n";
+}
+
+static std::optional<CompilerOptions> parseOptions(int argc, char **argv) {
+  CompilerOptions options;
+  bool positionalOutput = false;
+  for (int i = 1; i < argc; ++i) {
+    const std::string argument = argv[i];
+    if (argument == "-h" || argument == "--help") {
+      printUsage(argv[0]);
+      return std::nullopt;
+    }
+    if (argument == "-S" || argument == "--emit-llvm") {
+      options.emitLLVM = true;
+      continue;
+    }
+    if (argument == "-c") continue;
+    if (argument == "-o") {
+      if (++i == argc) {
+        llvm::errs() << "error: '-o' requires a file name\n";
+        return std::nullopt;
+      }
+      options.output = argv[i];
+      continue;
+    }
+    if (argument.size() == 3 && argument[0] == '-' && argument[1] == 'O' &&
+        argument[2] >= '0' && argument[2] <= '3') {
+      options.optimization = argument[2] - '0';
+      continue;
+    }
+    if (!argument.empty() && argument[0] == '-') {
+      llvm::errs() << "error: unknown option '" << argument << "'\n";
+      return std::nullopt;
+    }
+    if (options.input.empty()) options.input = argument;
+    else if (options.output.empty()) {
+      // Keep compatibility with the original "input output" interface.
+      options.output = argument;
+      positionalOutput = true;
+    } else {
+      llvm::errs() << "error: too many input files\n";
+      return std::nullopt;
+    }
   }
+  if ((positionalOutput || !options.output.empty()) &&
+      std::filesystem::path(options.output).extension() == ".ll")
+    options.emitLLVM = true;
+  if (options.output.empty()) {
+    if (options.emitLLVM) {
+      options.output = "-";
+    } else if (options.input.empty()) {
+      options.output = "a.o";
+    } else {
+      auto path = std::filesystem::path(options.input);
+      path.replace_extension(".o");
+      options.output = path.string();
+    }
+  }
+  return options;
+}
+
+static llvm::OptimizationLevel optimizationLevel(unsigned level) {
+  switch (level) {
+  case 0: return llvm::OptimizationLevel::O0;
+  case 1: return llvm::OptimizationLevel::O1;
+  case 2: return llvm::OptimizationLevel::O2;
+  default: return llvm::OptimizationLevel::O3;
+  }
+}
+
+static void optimizeModule(llvm::Module &module, llvm::TargetMachine *machine,
+                           llvm::OptimizationLevel level) {
+  llvm::LoopAnalysisManager loops;
+  llvm::FunctionAnalysisManager functions;
+  llvm::CGSCCAnalysisManager cgscc;
+  llvm::ModuleAnalysisManager modules;
+  llvm::PassBuilder passes(machine);
+  passes.registerModuleAnalyses(modules);
+  passes.registerCGSCCAnalyses(cgscc);
+  passes.registerFunctionAnalyses(functions);
+  passes.registerLoopAnalyses(loops);
+  passes.crossRegisterProxies(loops, functions, cgscc, modules);
+  llvm::ModulePassManager pipeline = level == llvm::OptimizationLevel::O0
+      ? passes.buildO0DefaultPipeline(level)
+      : passes.buildPerModuleDefaultPipeline(level);
+  pipeline.run(module, modules);
+}
+
+static bool emitObject(llvm::Module &module, llvm::TargetMachine &machine,
+                       llvm::raw_pwrite_stream &output) {
+  llvm::legacy::PassManager passes;
+  if (machine.addPassesToEmitFile(passes, output, nullptr,
+                                  llvm::CodeGenFileType::ObjectFile)) {
+    llvm::errs() << "error: target does not support object-file emission\n";
+    return false;
+  }
+  passes.run(module);
+  return true;
+}
+
+int main(int argc, char **argv) {
+  for (int i = 1; i < argc; ++i) {
+    if (std::string_view(argv[i]) == "-h" ||
+        std::string_view(argv[i]) == "--help") {
+      printUsage(argv[0]);
+      return 0;
+    }
+  }
+  auto parsedOptions = parseOptions(argc, argv);
+  if (!parsedOptions) return 1;
+  const CompilerOptions &options = *parsedOptions;
 
   std::ifstream inputFile;
   std::istream *source = &std::cin;
-  if (argc >= 2) {
-    inputFile.open(argv[1]);
+  if (!options.input.empty()) {
+    inputFile.open(options.input);
     if (!inputFile) {
-      llvm::errs() << "error: cannot open input file '" << argv[1] << "'\n";
+      llvm::errs() << "error: cannot open input file '" << options.input << "'\n";
       return 1;
     }
     source = &inputFile;
@@ -726,8 +851,30 @@ int main(int argc, char **argv) {
   auto *tree = parser.program();
   if (errors.failed) return 1;
 
+  if (llvm::InitializeNativeTarget() || llvm::InitializeNativeTargetAsmPrinter()) {
+    llvm::errs() << "error: failed to initialize the native LLVM target\n";
+    return 1;
+  }
+  const llvm::Triple triple(llvm::sys::getDefaultTargetTriple());
+  std::string targetError;
+  const llvm::Target *target = llvm::TargetRegistry::lookupTarget(triple, targetError);
+  if (!target) {
+    llvm::errs() << "error: " << targetError << '\n';
+    return 1;
+  }
+  const auto codegenLevel = static_cast<llvm::CodeGenOptLevel>(options.optimization);
+  std::unique_ptr<llvm::TargetMachine> targetMachine(target->createTargetMachine(
+      triple, llvm::sys::getHostCPUName(), "", llvm::TargetOptions{},
+      std::nullopt, std::nullopt, codegenLevel));
+  if (!targetMachine) {
+    llvm::errs() << "error: failed to create the native target machine\n";
+    return 1;
+  }
+
   llvm::LLVMContext context;
-  llvm::Module module(argc >= 2 ? argv[1] : "stdin", context);
+  llvm::Module module(options.input.empty() ? "stdin" : options.input, context);
+  module.setTargetTriple(triple);
+  module.setDataLayout(targetMachine->createDataLayout());
   try {
     SysYCodegen codegen(context, module);
     codegen.generate(tree);
@@ -736,18 +883,23 @@ int main(int argc, char **argv) {
     return 1;
   }
   if (llvm::verifyModule(module, &llvm::errs())) return 1;
+  optimizeModule(module, targetMachine.get(),
+                 optimizationLevel(options.optimization));
+  if (llvm::verifyModule(module, &llvm::errs())) return 1;
 
-  if (argc == 3) {
-    std::error_code error;
-    llvm::raw_fd_ostream output(argv[2], error);
-    if (error) {
-      llvm::errs() << "error: cannot open output file '" << argv[2]
-                   << "': " << error.message() << '\n';
-      return 1;
-    }
-    module.print(output, nullptr);
-  } else {
-    module.print(llvm::outs(), nullptr);
+  if (options.output == "-") {
+    if (options.emitLLVM) module.print(llvm::outs(), nullptr);
+    else if (!emitObject(module, *targetMachine, llvm::outs())) return 1;
+    return 0;
   }
+  std::error_code error;
+  llvm::raw_fd_ostream output(options.output, error, llvm::sys::fs::OF_None);
+  if (error) {
+    llvm::errs() << "error: cannot open output file '" << options.output
+                 << "': " << error.message() << '\n';
+    return 1;
+  }
+  if (options.emitLLVM) module.print(output, nullptr);
+  else if (!emitObject(module, *targetMachine, output)) return 1;
   return 0;
 }

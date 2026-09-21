@@ -54,4 +54,5 @@ target_link_libraries(mioyi-lang PRIVATE antlr4_static ${llvm_libs})
 target_compile_features(mioyi-lang PRIVATE cxx_std_23)
 set_target_properties(mioyi-lang PROPERTIES
   CXX_EXTENSIONS OFF
+  INTERPROCEDURAL_OPTIMIZATION_RELEASE ON
 )

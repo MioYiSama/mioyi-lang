@@ -17,4 +17,9 @@ include("${llvm_BINARY_DIR}/lib/cmake/llvm/LLVMConfig.cmake")
 
 # https://llvm.org/docs/CMake.html#embedding-llvm-in-your-project
 separate_arguments(LLVM_DEFINITIONS_LIST NATIVE_COMMAND ${LLVM_DEFINITIONS})
-llvm_map_components_to_libnames(llvm_libs support core irreader)
+llvm_map_components_to_libnames(llvm_libs
+  support
+  core
+  passes
+  nativecodegen
+)
