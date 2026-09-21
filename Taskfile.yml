@@ -1,0 +1,21 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+
+version: "3"
+
+tasks:
+  configure:
+    sources:
+      - CMakeLists.txt
+    cmds:
+      - cmake --fresh -B build -G "Ninja Multi-Config" .
+    env:
+      CMAKE_POLICY_VERSION_MINIMUM: 3.5
+      CMAKE_EXPORT_COMPILE_COMMANDS: ON
+
+  build:
+    deps:
+      - configure
+    cmds:
+      - cmake --build build
+    generates:
+      - build/Debug/mioyi-lang
