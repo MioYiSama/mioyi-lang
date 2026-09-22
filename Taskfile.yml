@@ -1,39 +1,29 @@
 # yaml-language-server: $schema=https://taskfile.dev/schema.json
-
 version: "3"
 
 tasks:
   configure:
-    sources:
-      - CMakeLists.txt
-      - cmake/*.cmake
     cmds:
-      - cmake -B build -G "Ninja Multi-Config" .
+      - >
+        cmake
+        -B build
+        -G "Ninja Multi-Config"
+        -DCMAKE_OSX_SYSROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk
+        .
     env:
-      CC: clang
       CXX: clang++
-      CMAKE_OSX_SYSROOT: /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX27.0.sdk
-      CMAKE_POLICY_VERSION_MINIMUM: 3.5
-      CMAKE_EXPORT_COMPILE_COMMANDS: ON
+      CMAKE_POLICY_VERSION_MINIMUM: 3.5 # 兼容 antlr4
+      CMAKE_EXPORT_COMPILE_COMMANDS: ON # clangd 支持
 
   build:
     deps:
       - configure
     cmds:
       - cmake --build build
-    generates:
-      - build/Debug/mioyi-lang
 
   build:release:
     deps:
       - configure
     cmds:
       - cmake --build build --config Release
-    generates:
-      - build/Release/mioyi-lang
-
-  antlr4:
-    cmds:
-      - uvx --from=antlr4-tools antlr4
-    env:
-      ANTLR4_TOOLS_ANTLR_VERSION: 4.13.2
+      - strip build/Release/mioyi-lang
