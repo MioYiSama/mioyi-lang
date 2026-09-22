@@ -36,4 +36,18 @@ target_sources(mioyi-lang PRIVATE
 # 依赖
 target_include_directories(mioyi-lang PRIVATE "${GRAMMAR_INCLUDE_DIR}" ${LLVM_INCLUDE_DIRS})
 target_compile_definitions(mioyi-lang PRIVATE ${LLVM_DEFINITIONS_LIST})
-target_link_libraries(mioyi-lang PRIVATE antlr4_static CLI11::CLI11 glaze::glaze ${llvm_libs})
+if(WIN32)
+  set(MIOYI_LLD_LIBRARY lldCOFF)
+elseif(APPLE)
+  set(MIOYI_LLD_LIBRARY lldMachO)
+else()
+  set(MIOYI_LLD_LIBRARY lldELF)
+endif()
+
+target_link_libraries(mioyi-lang PRIVATE
+  antlr4_static
+  CLI11::CLI11
+  glaze::glaze
+  ${MIOYI_LLD_LIBRARY}
+  ${llvm_libs}
+)
