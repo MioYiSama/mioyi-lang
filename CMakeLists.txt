@@ -7,17 +7,11 @@ include(cmake/cli11.cmake)
 include(cmake/glaze.cmake)
 include(cmake/llvm.cmake)
 include(cmake/grammar.cmake)
-grammar_generate(src/grammar/Expression.g4)
 
 add_executable(mioyi-lang)
-# 配置
-target_compile_features(mioyi-lang PRIVATE cxx_std_23)
-set_target_properties(mioyi-lang PROPERTIES
-  CXX_EXTENSIONS OFF
-  INTERPROCEDURAL_OPTIMIZATION_RELEASE ON
-)
 
 # 源码
+grammar_generate(src/grammar/Expression.g4)
 target_sources(mioyi-lang PRIVATE
   src/main.cpp
   ${GRAMMAR_SOURCES}
@@ -34,20 +28,19 @@ target_sources(mioyi-lang PRIVATE
 )
 
 # 依赖
-target_include_directories(mioyi-lang PRIVATE "${GRAMMAR_INCLUDE_DIR}" ${LLVM_INCLUDE_DIRS})
-target_compile_definitions(mioyi-lang PRIVATE ${LLVM_DEFINITIONS_LIST})
-if(WIN32)
-  set(MIOYI_LLD_LIBRARY lldCOFF)
-elseif(APPLE)
-  set(MIOYI_LLD_LIBRARY lldMachO)
-else()
-  set(MIOYI_LLD_LIBRARY lldELF)
-endif()
-
+target_include_directories(mioyi-lang PRIVATE
+  "${GRAMMAR_INCLUDE_DIR}"
+  ${LLVM_INCLUDE_DIRS}
+)
 target_link_libraries(mioyi-lang PRIVATE
   antlr4_static
   CLI11::CLI11
   glaze::glaze
-  ${MIOYI_LLD_LIBRARY}
   ${llvm_libs}
+)
+target_compile_definitions(mioyi-lang PRIVATE ${LLVM_DEFINITIONS_LIST})
+target_compile_features(mioyi-lang PRIVATE cxx_std_23)
+set_target_properties(mioyi-lang PROPERTIES
+  CXX_EXTENSIONS OFF
+  INTERPROCEDURAL_OPTIMIZATION_RELEASE ON
 )
