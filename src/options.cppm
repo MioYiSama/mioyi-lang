@@ -7,9 +7,13 @@ module;
 
 export module mioyi.options;
 
+export enum class Command { Compile, Ast };
+
 export struct CompilerOptions {
+  Command command = Command::Compile;
   std::string input;
   std::string output;
+  std::string astFormat;
   unsigned optimization = 2;
   bool compileOnly = false;
   bool emitLLVM = false;
@@ -20,6 +24,16 @@ namespace {
 
 void finalizeOptions(CompilerOptions &options,
                      const std::string &positionalOutput) {
+  if (options.command == Command::Ast) {
+    if (options.output.empty())
+      options.output = "-";
+    if (options.astFormat.empty()) {
+      const auto extension = std::filesystem::path(options.output).extension();
+      options.astFormat =
+          extension == ".yaml" || extension == ".yml" ? "yaml" : "json";
+    }
+    return;
+  }
   if (!positionalOutput.empty()) options.output = positionalOutput;
   if (!options.output.empty() &&
       std::filesystem::path(options.output).extension() == ".ll")
@@ -70,6 +84,15 @@ export int parseOptions(int argc, char **argv, CompilerOptions &options) {
   app.add_option("-O", options.optimization, "Optimization level")
       ->check(CLI::Range(0u, 3u))
       ->default_str("2");
+
+  auto *ast = app.add_subcommand("ast", "Serialize the parsed AST");
+  ast->callback([&options] { options.command = Command::Ast; });
+  ast->add_option("input", options.input,
+                  "Input SysY source (stdin if omitted)");
+  ast->add_option("-o,--output", options.output,
+                  "Output file (stdout if omitted)");
+  ast->add_option("-f,--format", options.astFormat, "Output format")
+      ->check(CLI::IsMember({"json", "yaml"}));
   try {
     app.parse(argc, argv);
   } catch (const CLI::ParseError &error) {

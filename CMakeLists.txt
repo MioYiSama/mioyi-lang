@@ -4,6 +4,7 @@ project(mioyi-lang LANGUAGES CXX)
 include(FetchContent)
 include(cmake/antlr4.cmake)
 include(cmake/cli11.cmake)
+include(cmake/glaze.cmake)
 include(cmake/llvm.cmake)
 include(cmake/grammar.cmake)
 grammar_generate(src/grammar/Expression.g4)
@@ -24,6 +25,7 @@ target_sources(mioyi-lang PRIVATE
 target_sources(mioyi-lang PRIVATE
   FILE_SET CXX_MODULES FILES
   src/backend.cppm
+  src/ast.cppm
   src/compiler.cppm
   src/frontend.cppm
   src/linker.cppm
@@ -34,4 +36,4 @@ target_sources(mioyi-lang PRIVATE
 # 依赖
 target_include_directories(mioyi-lang PRIVATE "${GRAMMAR_INCLUDE_DIR}" ${LLVM_INCLUDE_DIRS})
 target_compile_definitions(mioyi-lang PRIVATE ${LLVM_DEFINITIONS_LIST})
-target_link_libraries(mioyi-lang PRIVATE antlr4_static CLI11::CLI11 ${llvm_libs})
+target_link_libraries(mioyi-lang PRIVATE antlr4_static CLI11::CLI11 glaze::glaze ${llvm_libs})
