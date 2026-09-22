@@ -1,3 +1,6 @@
+# yaml-language-server: $schema=https://www.schemastore.org/clangd.json
+
+# 阻止 clangd 索引庞大的 LLVM 源码树
 If:
   PathMatch: \.cache/.*
 Index:

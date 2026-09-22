@@ -10,6 +10,9 @@ tasks:
     cmds:
       - cmake -B build -G "Ninja Multi-Config" .
     env:
+      CC: clang
+      CXX: clang++
+      CMAKE_OSX_SYSROOT: /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX27.0.sdk
       CMAKE_POLICY_VERSION_MINIMUM: 3.5
       CMAKE_EXPORT_COMPILE_COMMANDS: ON
 

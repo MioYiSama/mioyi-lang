@@ -39,10 +39,21 @@ add_custom_command(
 )
 
 add_executable(mioyi-lang)
+target_compile_features(mioyi-lang PRIVATE cxx_std_23)
+set_target_properties(mioyi-lang PROPERTIES
+  CXX_EXTENSIONS OFF
+  INTERPROCEDURAL_OPTIMIZATION_RELEASE ON
+)
+
 target_sources(mioyi-lang PRIVATE
   src/main.cpp
   ${ANTLR_GENERATED_SOURCES}
   ${ANTLR_GENERATED_HEADERS}
+)
+target_sources(mioyi-lang PRIVATE
+  FILE_SET CXX_MODULES FILES
+  src/compiler.cppm
+  src/options.cppm
 )
 
 target_include_directories(mioyi-lang PRIVATE
@@ -51,9 +62,3 @@ target_include_directories(mioyi-lang PRIVATE
 )
 target_compile_definitions(mioyi-lang PRIVATE ${LLVM_DEFINITIONS_LIST})
 target_link_libraries(mioyi-lang PRIVATE antlr4_static CLI11::CLI11 ${llvm_libs})
-
-target_compile_features(mioyi-lang PRIVATE cxx_std_23)
-set_target_properties(mioyi-lang PROPERTIES
-  CXX_EXTENSIONS OFF
-  INTERPROCEDURAL_OPTIMIZATION_RELEASE ON
-)
