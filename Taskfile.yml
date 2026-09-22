@@ -28,3 +28,9 @@ tasks:
       - cmake --build build --config Release
     generates:
       - build/Release/mioyi-lang
+
+  antlr4:
+    cmds:
+      - uvx --from=antlr4-tools antlr4
+    env:
+      ANTLR4_TOOLS_ANTLR_VERSION: 4.13.2

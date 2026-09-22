@@ -3,6 +3,7 @@ project(mioyi-lang)
 
 include(FetchContent)
 include(cmake/antlr4.cmake)
+include(cmake/cli11.cmake)
 include(cmake/llvm.cmake)
 
 find_program(ANTLR4_EXECUTABLE antlr4 REQUIRED)
@@ -49,7 +50,7 @@ target_include_directories(mioyi-lang PRIVATE
   ${LLVM_INCLUDE_DIRS}
 )
 target_compile_definitions(mioyi-lang PRIVATE ${LLVM_DEFINITIONS_LIST})
-target_link_libraries(mioyi-lang PRIVATE antlr4_static ${llvm_libs})
+target_link_libraries(mioyi-lang PRIVATE antlr4_static CLI11::CLI11 ${llvm_libs})
 
 target_compile_features(mioyi-lang PRIVATE cxx_std_23)
 set_target_properties(mioyi-lang PROPERTIES

@@ -16,6 +16,7 @@
 #include <vector>
 
 #include <antlr4-runtime.h>
+#include <CLI/CLI.hpp>
 #include <ExpressionLexer.h>
 #include <ExpressionParser.h>
 
@@ -708,57 +709,15 @@ private:
 struct CompilerOptions {
   std::string input;
   std::string output;
+  std::string target = "native";
   unsigned optimization = 2;
   bool emitLLVM = false;
 };
 
-static void printUsage(const char *program) {
-  llvm::errs() << "usage: " << program
-               << " [-O0|-O1|-O2|-O3] [-c] [-S|--emit-llvm] [-o output] [input.sy]\n";
-}
-
-static std::optional<CompilerOptions> parseOptions(int argc, char **argv) {
-  CompilerOptions options;
-  bool positionalOutput = false;
-  for (int i = 1; i < argc; ++i) {
-    const std::string argument = argv[i];
-    if (argument == "-h" || argument == "--help") {
-      printUsage(argv[0]);
-      return std::nullopt;
-    }
-    if (argument == "-S" || argument == "--emit-llvm") {
-      options.emitLLVM = true;
-      continue;
-    }
-    if (argument == "-c") continue;
-    if (argument == "-o") {
-      if (++i == argc) {
-        llvm::errs() << "error: '-o' requires a file name\n";
-        return std::nullopt;
-      }
-      options.output = argv[i];
-      continue;
-    }
-    if (argument.size() == 3 && argument[0] == '-' && argument[1] == 'O' &&
-        argument[2] >= '0' && argument[2] <= '3') {
-      options.optimization = argument[2] - '0';
-      continue;
-    }
-    if (!argument.empty() && argument[0] == '-') {
-      llvm::errs() << "error: unknown option '" << argument << "'\n";
-      return std::nullopt;
-    }
-    if (options.input.empty()) options.input = argument;
-    else if (options.output.empty()) {
-      // Keep compatibility with the original "input output" interface.
-      options.output = argument;
-      positionalOutput = true;
-    } else {
-      llvm::errs() << "error: too many input files\n";
-      return std::nullopt;
-    }
-  }
-  if ((positionalOutput || !options.output.empty()) &&
+static void finalizeOptions(CompilerOptions &options,
+                            const std::string &positionalOutput) {
+  if (!positionalOutput.empty()) options.output = positionalOutput;
+  if (!options.output.empty() &&
       std::filesystem::path(options.output).extension() == ".ll")
     options.emitLLVM = true;
   if (options.output.empty()) {
@@ -772,7 +731,6 @@ static std::optional<CompilerOptions> parseOptions(int argc, char **argv) {
       options.output = path.string();
     }
   }
-  return options;
 }
 
 static llvm::OptimizationLevel optimizationLevel(unsigned level) {
@@ -815,16 +773,28 @@ static bool emitObject(llvm::Module &module, llvm::TargetMachine &machine,
 }
 
 int main(int argc, char **argv) {
-  for (int i = 1; i < argc; ++i) {
-    if (std::string_view(argv[i]) == "-h" ||
-        std::string_view(argv[i]) == "--help") {
-      printUsage(argv[0]);
-      return 0;
-    }
+  CLI::App app{"Compile SysY source to LLVM IR or an object file"};
+  CompilerOptions options;
+  std::string positionalOutput;
+  app.add_option("input", options.input, "Input SysY source (stdin if omitted)");
+  auto *positionalOutputOption = app.add_option(
+      "output", positionalOutput, "Output file (legacy positional form)");
+  auto *outputOption = app.add_option("-o", options.output, "Output file");
+  outputOption->excludes(positionalOutputOption);
+  app.add_flag("-c", "Emit an object file");
+  app.add_flag("-S,--emit-llvm", options.emitLLVM, "Emit LLVM IR");
+  app.add_option("-O", options.optimization, "Optimization level")
+      ->check(CLI::Range(0u, 3u))
+      ->default_str("2");
+  app.add_option("--target", options.target, "Target architecture")
+      ->check(CLI::IsMember({"native", "x86_64"}))
+      ->default_str("native");
+  try {
+    app.parse(argc, argv);
+  } catch (const CLI::ParseError &error) {
+    return app.exit(error);
   }
-  auto parsedOptions = parseOptions(argc, argv);
-  if (!parsedOptions) return 1;
-  const CompilerOptions &options = *parsedOptions;
+  finalizeOptions(options, positionalOutput);
 
   std::ifstream inputFile;
   std::istream *source = &std::cin;
@@ -851,11 +821,18 @@ int main(int argc, char **argv) {
   auto *tree = parser.program();
   if (errors.failed) return 1;
 
-  if (llvm::InitializeNativeTarget() || llvm::InitializeNativeTargetAsmPrinter()) {
+  if (options.target == "x86_64") {
+    LLVMInitializeX86TargetInfo();
+    LLVMInitializeX86Target();
+    LLVMInitializeX86TargetMC();
+    LLVMInitializeX86AsmPrinter();
+  } else if (llvm::InitializeNativeTarget() ||
+             llvm::InitializeNativeTargetAsmPrinter()) {
     llvm::errs() << "error: failed to initialize the native LLVM target\n";
     return 1;
   }
-  const llvm::Triple triple(llvm::sys::getDefaultTargetTriple());
+  llvm::Triple triple(llvm::sys::getDefaultTargetTriple());
+  if (options.target == "x86_64") triple.setArch(llvm::Triple::x86_64);
   std::string targetError;
   const llvm::Target *target = llvm::TargetRegistry::lookupTarget(triple, targetError);
   if (!target) {
@@ -863,11 +840,15 @@ int main(int argc, char **argv) {
     return 1;
   }
   const auto codegenLevel = static_cast<llvm::CodeGenOptLevel>(options.optimization);
+  const std::string cpu = options.target == "native"
+      ? llvm::sys::getHostCPUName().str()
+      : "generic";
   std::unique_ptr<llvm::TargetMachine> targetMachine(target->createTargetMachine(
-      triple, llvm::sys::getHostCPUName(), "", llvm::TargetOptions{},
+      triple, cpu, "", llvm::TargetOptions{},
       std::nullopt, std::nullopt, codegenLevel));
   if (!targetMachine) {
-    llvm::errs() << "error: failed to create the native target machine\n";
+    llvm::errs() << "error: failed to create target machine for '"
+                 << triple.str() << "'\n";
     return 1;
   }
 
