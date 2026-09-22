@@ -1,11 +1,20 @@
 module;
 
+#include <expected>
 #include <print>
+#include <string>
 
 export module mioyi.builder;
 
-namespace mioyi::builder {
+export namespace mioyi::builder {
 
-export void build() { std::println("Hello, builder!"); }
+class Options {};
+
+using Result = std::expected<void, std::string>;
+
+Result build(Options) {
+  std::println("Hello, builder!");
+  return {};
+}
 
 } // namespace mioyi::builder

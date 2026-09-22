@@ -7,5 +7,4 @@ target_sources(mioyi-lang-formatter
 target_compile_features(mioyi-lang-formatter PRIVATE cxx_std_23)
 set_target_properties(mioyi-lang-formatter PROPERTIES
   CXX_EXTENSIONS OFF
-  INTERPROCEDURAL_OPTIMIZATION_RELEASE ON
 )

@@ -1,11 +1,20 @@
 module;
 
+#include <expected>
 #include <print>
+#include <string>
 
 export module mioyi.linter;
 
-namespace mioyi::linter {
+export namespace mioyi::linter {
 
-export void lint() { std::println("Hello, linter!"); }
+class Options {};
+
+using Result = std::expected<void, std::string>;
+
+Result lint(Options) {
+  std::println("Hello, linter!");
+  return {};
+}
 
 } // namespace mioyi::linter

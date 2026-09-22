@@ -7,5 +7,4 @@ target_sources(mioyi-lang-builder
 target_compile_features(mioyi-lang-builder PRIVATE cxx_std_23)
 set_target_properties(mioyi-lang-builder PROPERTIES
   CXX_EXTENSIONS OFF
-  INTERPROCEDURAL_OPTIMIZATION_RELEASE ON
 )

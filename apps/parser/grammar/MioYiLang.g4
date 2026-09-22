@@ -1,4 +1,4 @@
-grammar Expression;
+grammar MioYiLang;
 
 program         : topLevel* EOF;
 topLevel

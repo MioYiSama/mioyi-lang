@@ -1,11 +1,20 @@
 module;
 
+#include <expected>
 #include <print>
+#include <string>
 
 export module mioyi.formatter;
 
-namespace mioyi::formatter {
+export namespace mioyi::formatter {
 
-export void format() { std::println("Hello, formatter!"); }
+class Options {};
+
+using Result = std::expected<void, std::string>;
+
+Result format(Options) {
+  std::println("Hello, formatter!");
+  return {};
+}
 
 } // namespace mioyi::formatter

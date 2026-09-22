@@ -7,5 +7,4 @@ target_sources(mioyi-lang-pm
 target_compile_features(mioyi-lang-pm PRIVATE cxx_std_23)
 set_target_properties(mioyi-lang-pm PROPERTIES
   CXX_EXTENSIONS OFF
-  INTERPROCEDURAL_OPTIMIZATION_RELEASE ON
 )
