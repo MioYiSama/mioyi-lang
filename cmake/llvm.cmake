@@ -3,7 +3,23 @@ if(EXISTS "${LLVM_SOURCE_DIR}/llvm/CMakeLists.txt")
   set(FETCHCONTENT_SOURCE_DIR_LLVM "${LLVM_SOURCE_DIR}")
 endif()
 
-set(LLVM_TARGETS_TO_BUILD "AArch64;X86" CACHE STRING "" FORCE)
+string(TOLOWER "${CMAKE_HOST_SYSTEM_PROCESSOR}" MIOYI_HOST_PROCESSOR)
+if(MIOYI_HOST_PROCESSOR MATCHES "^(aarch64|arm64)$")
+  set(MIOYI_LLVM_TARGET AArch64)
+elseif(MIOYI_HOST_PROCESSOR MATCHES "^(x86_64|amd64)$")
+  set(MIOYI_LLVM_TARGET X86)
+else()
+  message(FATAL_ERROR
+    "Unsupported host CPU architecture: ${CMAKE_HOST_SYSTEM_PROCESSOR}. "
+    "Only aarch64 and x86_64 are supported."
+  )
+endif()
+
+set(LLVM_TARGETS_TO_BUILD "${MIOYI_LLVM_TARGET}" CACHE STRING "" FORCE)
+set(LLVM_INCLUDE_BENCHMARKS OFF CACHE BOOL "" FORCE)
+set(LLVM_INCLUDE_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(LLVM_INCLUDE_TESTS OFF CACHE BOOL "" FORCE)
+set(LLVM_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
 
 # https://github.com/llvm/llvm-project/releases/tag/llvmorg-23.1.1
 FetchContent_Declare(
@@ -24,5 +40,4 @@ llvm_map_components_to_libnames(llvm_libs
   core
   passes
   nativecodegen
-  x86codegen
 )

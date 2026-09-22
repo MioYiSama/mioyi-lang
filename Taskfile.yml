@@ -6,6 +6,7 @@ tasks:
     cmds:
       - >
         cmake
+        {{if eq (.FRESH | default "false") "true"}}--fresh{{end}}
         -B build
         -G "Ninja Multi-Config"
         -DCMAKE_OSX_SYSROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk
@@ -16,14 +17,10 @@ tasks:
       CMAKE_EXPORT_COMPILE_COMMANDS: ON # clangd 支持
 
   build:
-    deps:
-      - configure
     cmds:
       - cmake --build build
 
   build:release:
-    deps:
-      - configure
     cmds:
       - cmake --build build --config Release
       - strip build/Release/mioyi-lang

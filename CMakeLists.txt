@@ -23,8 +23,12 @@ target_sources(mioyi-lang PRIVATE
 )
 target_sources(mioyi-lang PRIVATE
   FILE_SET CXX_MODULES FILES
+  src/backend.cppm
   src/compiler.cppm
+  src/frontend.cppm
+  src/linker.cppm
   src/options.cppm
+  src/parser.cppm
 )
 
 # 依赖
