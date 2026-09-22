@@ -9,9 +9,9 @@ tasks:
         {{if eq (.FRESH | default "false") "true"}}--fresh{{end}}
         -B build
         -G "Ninja Multi-Config"
-        -DCMAKE_OSX_SYSROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk
         .
     env:
+      C: clang
       CXX: clang++
       CMAKE_POLICY_VERSION_MINIMUM: 3.5 # 兼容 antlr4
       CMAKE_EXPORT_COMPILE_COMMANDS: ON # clangd 支持

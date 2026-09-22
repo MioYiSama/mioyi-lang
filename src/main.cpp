@@ -1,12 +1,29 @@
-import mioyi.ast;
+import mioyi.builder;
+import mioyi.codegen;
 import mioyi.compiler;
-import mioyi.options;
+import mioyi.formatter;
+import mioyi.ls;
+import mioyi.linker;
+import mioyi.linter;
+import mioyi.manager;
+import mioyi.optimizer;
+import mioyi.pm;
+import mioyi.parser;
+import mioyi.transformer;
 
-int main(int argc, char **argv) {
-  CompilerOptions options;
-  const int result = parseOptions(argc, argv, options);
-  if (result != 0 || options.exitAfterParsing)
-    return result;
-  if (options.command == Command::Ast) return dumpAst(options);
-  return compile(options);
+int main() {
+  mioyi::builder::build();
+  mioyi::codegen::codegen();
+  mioyi::compiler::compile();
+  mioyi::formatter::format();
+  mioyi::ls::ls();
+  mioyi::linker::link();
+  mioyi::linter::lint();
+  mioyi::manager::manage();
+  mioyi::optimizer::optimize();
+  mioyi::pm::pm();
+  mioyi::parser::parse();
+  mioyi::transformer::transform();
+
+  return 0;
 }

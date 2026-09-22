@@ -1,0 +1,16 @@
+@intrinsic
+def true: Bool, false: Bool
+@intrinsic
+def Bool = type true | false;
+
+impl Array<T> {
+    @intrinsic
+    add: (value: T) => Void
+
+    @intrinsic
+    length: () => UInt64
+}
+
+impl Foo {
+    bar = { () => 666 }
+}

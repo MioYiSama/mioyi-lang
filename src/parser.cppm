@@ -3,6 +3,7 @@ module;
 #include <charconv>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <iostream>
 #include <memory>
 #include <stdexcept>
@@ -12,9 +13,9 @@ module;
 #include <utility>
 #include <vector>
 
-#include <antlr4-runtime.h>
 #include <ExpressionLexer.h>
 #include <ExpressionParser.h>
+#include <antlr4-runtime.h>
 
 export module mioyi.parser;
 
@@ -25,32 +26,50 @@ struct SourceLocation {
   std::size_t column = 0;
 };
 
-struct Expression {
-  enum class Kind { Integer, LValue, Call, Unary, Binary };
-
-  Kind kind = Kind::Integer;
+struct TypeRef {
   SourceLocation location;
-  std::int32_t integer = 0;
+  std::string name;
+  std::unique_ptr<TypeRef> element;
+};
+
+struct Expression {
+  enum class Kind {
+    Integer,
+    Floating,
+    String,
+    Character,
+    Boolean,
+    Void,
+    LValue,
+    Array,
+    Call,
+    Index,
+    Unary,
+    Binary
+  };
+
+  Kind kind = Kind::Void;
+  SourceLocation location;
+  std::uint64_t integer = 0;
+  double floating = 0;
+  bool boolean = false;
   std::string text;
   std::vector<std::unique_ptr<Expression>> operands;
 };
 
-struct Initializer {
-  SourceLocation location;
-  std::unique_ptr<Expression> expression;
-  std::vector<std::unique_ptr<Initializer>> elements;
-};
+enum class BindingKind { Variable, Value, Definition };
 
-struct VariableDefinition {
+struct Binding {
   SourceLocation location;
   std::string name;
-  std::vector<std::unique_ptr<Expression>> dimensions;
-  std::unique_ptr<Initializer> initializer;
+  std::unique_ptr<TypeRef> type;
+  std::unique_ptr<Expression> initializer;
 };
 
 struct Declaration {
-  bool constant = false;
-  std::vector<VariableDefinition> definitions;
+  BindingKind kind = BindingKind::Variable;
+  bool exported = false;
+  std::vector<Binding> bindings;
 };
 
 struct Statement {
@@ -60,7 +79,8 @@ struct Statement {
     Expression,
     Block,
     If,
-    While,
+    For,
+    ForEach,
     Break,
     Continue,
     Return
@@ -68,6 +88,7 @@ struct Statement {
 
   Kind kind = Kind::Expression;
   SourceLocation location;
+  std::string text;
   std::unique_ptr<Declaration> declaration;
   std::unique_ptr<Expression> target;
   std::unique_ptr<Expression> expression;
@@ -79,15 +100,16 @@ struct Statement {
 struct Parameter {
   SourceLocation location;
   std::string name;
-  bool array = false;
-  std::vector<std::unique_ptr<Expression>> dimensions;
+  std::unique_ptr<TypeRef> type;
 };
 
 struct Function {
   SourceLocation location;
   std::string name;
-  bool returnsValue = false;
+  bool exported = false;
+  std::vector<std::string> genericParameters;
   std::vector<Parameter> parameters;
+  std::unique_ptr<TypeRef> returnType;
   std::unique_ptr<Statement> body;
 };
 
@@ -128,16 +150,16 @@ class AstBuilder {
 public:
   std::unique_ptr<mioyi::Ast> build(ExpressionParser::ProgramContext *program) {
     auto ast = std::make_unique<mioyi::Ast>();
-    for (auto *child : program->compUnit()->children) {
+    for (auto *top : program->topLevel()) {
       mioyi::TopLevel item;
-      if (auto *declaration =
-              dynamic_cast<ExpressionParser::DeclContext *>(child))
-        item.declaration = buildDeclaration(declaration);
-      else if (auto *function =
-                   dynamic_cast<ExpressionParser::FuncDefContext *>(child))
+      if (auto *function =
+              dynamic_cast<ExpressionParser::FunctionTopLevelContext *>(top))
         item.function = buildFunction(function);
-      else
-        continue;
+      else if (auto *declaration =
+                   dynamic_cast<ExpressionParser::DeclarationTopLevelContext *>(
+                       top))
+        item.declaration = buildDeclaration(declaration->declaration(),
+                                            declaration->EXPORT() != nullptr);
       ast->items.push_back(std::move(item));
     }
     return ast;
@@ -149,28 +171,106 @@ private:
             context->getStart()->getCharPositionInLine() + 1};
   }
 
-  static std::int32_t integer(ExpressionParser::NumberContext *context) {
-    const std::string text = context->getText();
-    int base = 10;
-    std::string_view digits = text;
-    if (text.size() > 2 && text[0] == '0' &&
-        (text[1] == 'x' || text[1] == 'X')) {
-      base = 16;
-      digits.remove_prefix(2);
-    } else if (text.size() > 1 && text[0] == '0') {
-      base = 8;
-      digits.remove_prefix(1);
-    }
-    std::uint32_t value = 0;
-    auto [end, error] =
-        std::from_chars(digits.data(), digits.data() + digits.size(), value, base);
-    if (error != std::errc{} || end != digits.data() + digits.size())
-      throw AstError(location(context),
-                     "integer literal is outside the 32-bit range");
-    return static_cast<std::int32_t>(value);
+  [[noreturn]] static void fail(antlr4::ParserRuleContext *context,
+                                const std::string &message) {
+    throw AstError(location(context), message);
   }
 
-  static std::unique_ptr<mioyi::Expression>
+  static std::string decodeQuoted(std::string_view text) {
+    std::string result;
+    if (text.size() < 2)
+      return result;
+    for (std::size_t index = 1; index + 1 < text.size(); ++index) {
+      char value = text[index];
+      if (value != '\\') {
+        result.push_back(value);
+        continue;
+      }
+      if (++index + 1 >= text.size())
+        break;
+      switch (text[index]) {
+      case 'n':
+        result.push_back('\n');
+        break;
+      case 'r':
+        result.push_back('\r');
+        break;
+      case 't':
+        result.push_back('\t');
+        break;
+      case '0':
+        result.push_back('\0');
+        break;
+      case 'u': {
+        if (index + 4 >= text.size())
+          break;
+        unsigned codepoint = 0;
+        for (int digit = 0; digit < 4; ++digit) {
+          const char hex = text[++index];
+          codepoint =
+              codepoint * 16 + (hex >= '0' && hex <= '9'   ? hex - '0'
+                                : hex >= 'a' && hex <= 'f' ? hex - 'a' + 10
+                                                           : hex - 'A' + 10);
+        }
+        appendUtf8(result, codepoint);
+        break;
+      }
+      default:
+        result.push_back(text[index]);
+        break;
+      }
+    }
+    return result;
+  }
+
+  static void appendUtf8(std::string &output, std::uint32_t value) {
+    if (value <= 0x7f)
+      output.push_back(static_cast<char>(value));
+    else if (value <= 0x7ff) {
+      output.push_back(static_cast<char>(0xc0 | (value >> 6)));
+      output.push_back(static_cast<char>(0x80 | (value & 0x3f)));
+    } else if (value <= 0xffff) {
+      output.push_back(static_cast<char>(0xe0 | (value >> 12)));
+      output.push_back(static_cast<char>(0x80 | ((value >> 6) & 0x3f)));
+      output.push_back(static_cast<char>(0x80 | (value & 0x3f)));
+    } else {
+      output.push_back(static_cast<char>(0xf0 | (value >> 18)));
+      output.push_back(static_cast<char>(0x80 | ((value >> 12) & 0x3f)));
+      output.push_back(static_cast<char>(0x80 | ((value >> 6) & 0x3f)));
+      output.push_back(static_cast<char>(0x80 | (value & 0x3f)));
+    }
+  }
+
+  static std::uint32_t firstCodepoint(std::string_view text) {
+    if (text.empty())
+      return 0;
+    const auto first = static_cast<unsigned char>(text.front());
+    if (first < 0x80)
+      return first;
+    std::uint32_t result = first & (first < 0xe0   ? 0x1f
+                                    : first < 0xf0 ? 0x0f
+                                                   : 0x07);
+    const int length = first < 0xe0 ? 2 : first < 0xf0 ? 3 : 4;
+    for (int index = 1; index < length && index < static_cast<int>(text.size());
+         ++index)
+      result = (result << 6) | (static_cast<unsigned char>(text[index]) & 0x3f);
+    return result;
+  }
+
+  std::unique_ptr<mioyi::TypeRef>
+  buildType(ExpressionParser::TypeRefContext *context) {
+    auto result = std::make_unique<mioyi::TypeRef>();
+    result->location = location(context);
+    if (context->BUILTIN_TYPE())
+      result->name = context->BUILTIN_TYPE()->getText();
+    else {
+      result->name = "Array";
+      result->element = buildType(context->typeRef());
+    }
+    return result;
+  }
+
+  std::unique_ptr<mioyi::Expression>
   makeExpression(mioyi::Expression::Kind kind,
                  antlr4::ParserRuleContext *context) {
     auto result = std::make_unique<mioyi::Expression>();
@@ -180,44 +280,123 @@ private:
   }
 
   std::unique_ptr<mioyi::Expression>
-  buildLValue(ExpressionParser::LValContext *context) {
-    auto result = makeExpression(mioyi::Expression::Kind::LValue, context);
-    result->text = context->IDENT()->getText();
-    for (auto *index : context->exp())
-      result->operands.push_back(buildExpression(index));
+  buildInteger(ExpressionParser::IntegerLiteralContext *context) {
+    auto result = makeExpression(mioyi::Expression::Kind::Integer, context);
+    std::string text = context->INTEGER()->getText();
+    int base = 10;
+    std::string_view digits = text;
+    if (text.size() > 2 && text[0] == '0') {
+      if (text[1] == 'x' || text[1] == 'X')
+        base = 16;
+      else if (text[1] == 'b' || text[1] == 'B')
+        base = 2;
+      else if (text[1] == 'o' || text[1] == 'O')
+        base = 8;
+      if (base != 10)
+        digits.remove_prefix(2);
+    }
+    auto [end, error] = std::from_chars(
+        digits.data(), digits.data() + digits.size(), result->integer, base);
+    if (error != std::errc{} || end != digits.data() + digits.size())
+      fail(context, "integer literal is outside the 64-bit range");
+    if (context->BYTE_SUFFIX())
+      result->text = "Byte";
+    else if (context->LONG_SUFFIX())
+      result->text = "Int64";
+    else if (context->UINT_SUFFIX())
+      result->text = "UInt";
+    else if (context->ULONG_SUFFIX())
+      result->text = "UInt64";
+    else
+      result->text = "Int";
     return result;
   }
 
   std::unique_ptr<mioyi::Expression>
-  buildExpression(ExpressionParser::ExpContext *context) {
-    return buildAdd(context->addExp());
-  }
-
-  std::unique_ptr<mioyi::Expression>
-  buildPrimary(ExpressionParser::PrimaryExpContext *context) {
-    if (context->number()) {
-      auto result = makeExpression(mioyi::Expression::Kind::Integer, context);
-      result->integer = integer(context->number());
+  buildPrimary(ExpressionParser::PrimaryContext *context) {
+    if (context->integerLiteral())
+      return buildInteger(context->integerLiteral());
+    if (context->FLOAT_LITERAL()) {
+      auto result = makeExpression(mioyi::Expression::Kind::Floating, context);
+      std::string text = context->FLOAT_LITERAL()->getText();
+      if (!text.empty() && text.back() == 'L') {
+        result->text = "Float64";
+        text.pop_back();
+      } else
+        result->text = "Float";
+      result->floating = std::strtod(text.c_str(), nullptr);
       return result;
     }
-    if (context->exp()) return buildExpression(context->exp());
-    return buildLValue(context->lVal());
-  }
-
-  std::unique_ptr<mioyi::Expression>
-  buildUnary(ExpressionParser::UnaryExpContext *context) {
-    if (context->primaryExp()) return buildPrimary(context->primaryExp());
-    if (context->unaryOp()) {
-      auto result = makeExpression(mioyi::Expression::Kind::Unary, context);
-      result->text = context->unaryOp()->getText();
-      result->operands.push_back(buildUnary(context->unaryExp()));
+    if (context->STRING_LITERAL()) {
+      auto result = makeExpression(mioyi::Expression::Kind::String, context);
+      result->text = decodeQuoted(context->STRING_LITERAL()->getText());
       return result;
     }
-    auto result = makeExpression(mioyi::Expression::Kind::Call, context);
+    if (context->CHAR_LITERAL()) {
+      auto result = makeExpression(mioyi::Expression::Kind::Character, context);
+      const std::string decoded =
+          decodeQuoted(context->CHAR_LITERAL()->getText());
+      result->integer = firstCodepoint(decoded);
+      return result;
+    }
+    if (context->TRUE() || context->FALSE()) {
+      auto result = makeExpression(mioyi::Expression::Kind::Boolean, context);
+      result->boolean = context->TRUE() != nullptr;
+      return result;
+    }
+    if (context->VOID())
+      return makeExpression(mioyi::Expression::Kind::Void, context);
+    if (context->arrayLiteral()) {
+      auto result = makeExpression(mioyi::Expression::Kind::Array, context);
+      for (auto *element : context->arrayLiteral()->expression())
+        result->operands.push_back(buildExpression(element));
+      return result;
+    }
+    if (context->expression())
+      return buildExpression(context->expression());
+    auto result = makeExpression(mioyi::Expression::Kind::LValue, context);
     result->text = context->IDENT()->getText();
-    if (context->funcRParams())
-      for (auto *argument : context->funcRParams()->exp())
-        result->operands.push_back(buildExpression(argument));
+    return result;
+  }
+
+  std::unique_ptr<mioyi::Expression>
+  buildPostfix(ExpressionParser::PostfixContext *context) {
+    auto value = buildPrimary(context->primary());
+    std::size_t argumentIndex = 0;
+    std::size_t expressionIndex = 0;
+    for (std::size_t index = 1; index < context->children.size();) {
+      const std::string token = context->children[index]->getText();
+      if (token == "(") {
+        auto result = makeExpression(mioyi::Expression::Kind::Call, context);
+        result->operands.push_back(std::move(value));
+        if (argumentIndex < context->arguments().size()) {
+          auto *arguments = context->arguments(argumentIndex++);
+          for (auto *argument : arguments->expression())
+            result->operands.push_back(buildExpression(argument));
+          index += 3;
+        } else
+          index += 2;
+        value = std::move(result);
+      } else if (token == "[") {
+        auto result = makeExpression(mioyi::Expression::Kind::Index, context);
+        result->operands.push_back(std::move(value));
+        result->operands.push_back(
+            buildExpression(context->expression(expressionIndex++)));
+        value = std::move(result);
+        index += 3;
+      } else
+        ++index;
+    }
+    return value;
+  }
+
+  std::unique_ptr<mioyi::Expression>
+  buildUnary(ExpressionParser::UnaryContext *context) {
+    if (context->postfix())
+      return buildPostfix(context->postfix());
+    auto result = makeExpression(mioyi::Expression::Kind::Unary, context);
+    result->text = context->children.front()->getText();
+    result->operands.push_back(buildUnary(context->unary()));
     return result;
   }
 
@@ -237,88 +416,86 @@ private:
   }
 
   std::unique_ptr<mioyi::Expression>
-  buildMul(ExpressionParser::MulExpContext *context) {
-    return buildBinary(context, context->unaryExp(),
+  buildMultiplicative(ExpressionParser::MultiplicativeContext *context) {
+    return buildBinary(context, context->unary(),
                        [&](auto *child) { return buildUnary(child); });
   }
+  std::unique_ptr<mioyi::Expression>
+  buildAdditive(ExpressionParser::AdditiveContext *context) {
+    return buildBinary(context, context->multiplicative(),
+                       [&](auto *child) { return buildMultiplicative(child); });
+  }
+  std::unique_ptr<mioyi::Expression>
+  buildComparison(ExpressionParser::ComparisonContext *context) {
+    return buildBinary(context, context->additive(),
+                       [&](auto *child) { return buildAdditive(child); });
+  }
+  std::unique_ptr<mioyi::Expression>
+  buildEquality(ExpressionParser::EqualityContext *context) {
+    return buildBinary(context, context->comparison(),
+                       [&](auto *child) { return buildComparison(child); });
+  }
+  std::unique_ptr<mioyi::Expression>
+  buildLogicalAnd(ExpressionParser::LogicalAndContext *context) {
+    return buildBinary(context, context->equality(),
+                       [&](auto *child) { return buildEquality(child); });
+  }
+  std::unique_ptr<mioyi::Expression>
+  buildLogicalOr(ExpressionParser::LogicalOrContext *context) {
+    return buildBinary(context, context->logicalAnd(),
+                       [&](auto *child) { return buildLogicalAnd(child); });
+  }
+  std::unique_ptr<mioyi::Expression>
+  buildExpression(ExpressionParser::ExpressionContext *context) {
+    return buildLogicalOr(context->logicalOr());
+  }
 
   std::unique_ptr<mioyi::Expression>
-  buildAdd(ExpressionParser::AddExpContext *context) {
-    return buildBinary(context, context->mulExp(),
-                       [&](auto *child) { return buildMul(child); });
+  buildLValue(ExpressionParser::LvalueContext *context) {
+    auto value = makeExpression(mioyi::Expression::Kind::LValue, context);
+    value->text = context->IDENT()->getText();
+    for (auto *index : context->expression()) {
+      auto result = makeExpression(mioyi::Expression::Kind::Index, context);
+      result->operands.push_back(std::move(value));
+      result->operands.push_back(buildExpression(index));
+      value = std::move(result);
+    }
+    return value;
   }
 
-  std::unique_ptr<mioyi::Expression>
-  buildRel(ExpressionParser::RelExpContext *context) {
-    return buildBinary(context, context->addExp(),
-                       [&](auto *child) { return buildAdd(child); });
-  }
-
-  std::unique_ptr<mioyi::Expression>
-  buildEq(ExpressionParser::EqExpContext *context) {
-    return buildBinary(context, context->relExp(),
-                       [&](auto *child) { return buildRel(child); });
-  }
-
-  std::unique_ptr<mioyi::Expression>
-  buildAnd(ExpressionParser::LAndExpContext *context) {
-    return buildBinary(context, context->eqExp(),
-                       [&](auto *child) { return buildEq(child); });
-  }
-
-  std::unique_ptr<mioyi::Expression>
-  buildOr(ExpressionParser::LOrExpContext *context) {
-    return buildBinary(context, context->lAndExp(),
-                       [&](auto *child) { return buildAnd(child); });
-  }
-
-  std::unique_ptr<mioyi::Initializer>
-  buildInitializer(ExpressionParser::InitValContext *context) {
-    auto result = std::make_unique<mioyi::Initializer>();
-    result->location = location(context);
-    if (context->exp()) result->expression = buildExpression(context->exp());
-    for (auto *element : context->initVal())
-      result->elements.push_back(buildInitializer(element));
-    return result;
-  }
-
-  std::unique_ptr<mioyi::Initializer>
-  buildInitializer(ExpressionParser::ConstInitValContext *context) {
-    auto result = std::make_unique<mioyi::Initializer>();
-    result->location = location(context);
-    if (context->constExp())
-      result->expression = buildAdd(context->constExp()->addExp());
-    for (auto *element : context->constInitVal())
-      result->elements.push_back(buildInitializer(element));
-    return result;
+  mioyi::BindingKind
+  buildBindingKind(ExpressionParser::BindingKindContext *context) {
+    if (context->VAR())
+      return mioyi::BindingKind::Variable;
+    if (context->VAL())
+      return mioyi::BindingKind::Value;
+    return mioyi::BindingKind::Definition;
   }
 
   std::unique_ptr<mioyi::Declaration>
-  buildDeclaration(ExpressionParser::DeclContext *context) {
+  buildDeclaration(ExpressionParser::DeclarationContext *context,
+                   bool exported = false) {
     auto result = std::make_unique<mioyi::Declaration>();
-    result->constant = context->constDecl() != nullptr;
-    if (auto *declaration = context->constDecl()) {
-      for (auto *definition : declaration->constDef()) {
-        mioyi::VariableDefinition item;
-        item.location = location(definition);
-        item.name = definition->IDENT()->getText();
-        for (auto *dimension : definition->constExp())
-          item.dimensions.push_back(buildAdd(dimension->addExp()));
-        item.initializer = buildInitializer(definition->constInitVal());
-        result->definitions.push_back(std::move(item));
-      }
-    } else {
-      for (auto *definition : context->varDecl()->varDef()) {
-        mioyi::VariableDefinition item;
-        item.location = location(definition);
-        item.name = definition->IDENT()->getText();
-        for (auto *dimension : definition->constExp())
-          item.dimensions.push_back(buildAdd(dimension->addExp()));
-        if (definition->initVal())
-          item.initializer = buildInitializer(definition->initVal());
-        result->definitions.push_back(std::move(item));
-      }
+    result->kind = buildBindingKind(context->bindingKind());
+    result->exported = exported;
+    for (auto *binding : context->binding()) {
+      mioyi::Binding item;
+      item.location = location(binding);
+      item.name = binding->IDENT()->getText();
+      if (binding->typeRef())
+        item.type = buildType(binding->typeRef());
+      item.initializer = buildExpression(binding->expression());
+      result->bindings.push_back(std::move(item));
     }
+    return result;
+  }
+
+  std::unique_ptr<mioyi::Statement>
+  declarationStatement(ExpressionParser::DeclarationContext *context) {
+    auto result = std::make_unique<mioyi::Statement>();
+    result->kind = mioyi::Statement::Kind::Declaration;
+    result->location = location(context);
+    result->declaration = buildDeclaration(context);
     return result;
   }
 
@@ -327,79 +504,116 @@ private:
     auto result = std::make_unique<mioyi::Statement>();
     result->kind = mioyi::Statement::Kind::Block;
     result->location = location(context);
-    for (auto *item : context->blockItem()) {
-      if (item->decl()) {
-        auto child = std::make_unique<mioyi::Statement>();
-        child->kind = mioyi::Statement::Kind::Declaration;
-        child->location = location(item->decl());
-        child->declaration = buildDeclaration(item->decl());
-        result->block.push_back(std::move(child));
-      } else {
-        result->block.push_back(buildStatement(item->stmt()));
-      }
+    for (auto *child : context->children) {
+      if (auto *declaration =
+              dynamic_cast<ExpressionParser::DeclarationContext *>(child))
+        result->block.push_back(declarationStatement(declaration));
+      else if (auto *statement =
+                   dynamic_cast<ExpressionParser::StatementContext *>(child))
+        result->block.push_back(buildStatement(statement));
     }
     return result;
   }
 
   std::unique_ptr<mioyi::Statement>
-  buildStatement(ExpressionParser::StmtContext *context) {
+  buildIf(ExpressionParser::IfStatementContext *context) {
+    auto result = std::make_unique<mioyi::Statement>();
+    result->kind = mioyi::Statement::Kind::If;
+    result->location = location(context);
+    result->expression = buildExpression(context->expression());
+    result->thenBranch = buildBlock(context->block(0));
+    if (context->ifStatement())
+      result->elseBranch = buildIf(context->ifStatement());
+    else if (context->block().size() > 1)
+      result->elseBranch = buildBlock(context->block(1));
+    return result;
+  }
+
+  std::unique_ptr<mioyi::Statement>
+  buildFor(ExpressionParser::ForStatementContext *context) {
+    auto result = std::make_unique<mioyi::Statement>();
+    result->location = location(context);
+    result->kind = context->IN() ? mioyi::Statement::Kind::ForEach
+                                 : mioyi::Statement::Kind::For;
+    if (context->IDENT())
+      result->text = context->IDENT()->getText();
+    if (context->expression())
+      result->expression = buildExpression(context->expression());
+    result->thenBranch = buildBlock(context->block());
+    return result;
+  }
+
+  std::unique_ptr<mioyi::Statement>
+  buildStatement(ExpressionParser::StatementContext *context) {
     auto result = std::make_unique<mioyi::Statement>();
     result->location = location(context);
     if (auto *statement =
-            dynamic_cast<ExpressionParser::AssignStmtContext *>(context)) {
+            dynamic_cast<ExpressionParser::BlockStatementContext *>(context))
+      return buildBlock(statement->block());
+    if (auto *statement =
+            dynamic_cast<ExpressionParser::ConditionalStatementContext *>(
+                context))
+      return buildIf(statement->ifStatement());
+    if (auto *statement =
+            dynamic_cast<ExpressionParser::LoopStatementContext *>(context))
+      return buildFor(statement->forStatement());
+    if (auto *statement =
+            dynamic_cast<ExpressionParser::ReturnStatementContext *>(context)) {
+      result->kind = mioyi::Statement::Kind::Return;
+      if (statement->expression())
+        result->expression = buildExpression(statement->expression());
+    } else if (dynamic_cast<ExpressionParser::BreakStatementContext *>(context))
+      result->kind = mioyi::Statement::Kind::Break;
+    else if (dynamic_cast<ExpressionParser::ContinueStatementContext *>(
+                 context))
+      result->kind = mioyi::Statement::Kind::Continue;
+    else if (auto *statement =
+                 dynamic_cast<ExpressionParser::AssignmentStatementContext *>(
+                     context)) {
       result->kind = mioyi::Statement::Kind::Assignment;
-      result->target = buildLValue(statement->lVal());
-      result->expression = buildExpression(statement->exp());
+      result->text = statement->assignmentOperator()->getText();
+      result->target = buildLValue(statement->lvalue());
+      result->expression = buildExpression(statement->expression());
     } else if (auto *statement =
-                   dynamic_cast<ExpressionParser::ExpressionStmtContext *>(
+                   dynamic_cast<ExpressionParser::ExpressionStatementContext *>(
                        context)) {
       result->kind = mioyi::Statement::Kind::Expression;
-      if (statement->exp()) result->expression = buildExpression(statement->exp());
-    } else if (auto *statement =
-                   dynamic_cast<ExpressionParser::BlockStmtContext *>(context)) {
-      return buildBlock(statement->block());
-    } else if (auto *statement =
-                   dynamic_cast<ExpressionParser::IfStmtContext *>(context)) {
-      result->kind = mioyi::Statement::Kind::If;
-      result->expression = buildOr(statement->cond()->lOrExp());
-      result->thenBranch = buildStatement(statement->stmt(0));
-      if (statement->ELSE())
-        result->elseBranch = buildStatement(statement->stmt(1));
-    } else if (auto *statement =
-                   dynamic_cast<ExpressionParser::WhileStmtContext *>(context)) {
-      result->kind = mioyi::Statement::Kind::While;
-      result->expression = buildOr(statement->cond()->lOrExp());
-      result->thenBranch = buildStatement(statement->stmt());
-    } else if (dynamic_cast<ExpressionParser::BreakStmtContext *>(context)) {
-      result->kind = mioyi::Statement::Kind::Break;
-    } else if (dynamic_cast<ExpressionParser::ContinueStmtContext *>(context)) {
-      result->kind = mioyi::Statement::Kind::Continue;
-    } else if (auto *statement =
-                   dynamic_cast<ExpressionParser::ReturnStmtContext *>(context)) {
-      result->kind = mioyi::Statement::Kind::Return;
-      if (statement->exp()) result->expression = buildExpression(statement->exp());
+      result->expression = buildExpression(statement->expression());
     }
     return result;
   }
 
   std::unique_ptr<mioyi::Function>
-  buildFunction(ExpressionParser::FuncDefContext *context) {
+  buildFunction(ExpressionParser::FunctionTopLevelContext *context) {
     auto result = std::make_unique<mioyi::Function>();
     result->location = location(context);
     result->name = context->IDENT()->getText();
-    result->returnsValue = context->funcType()->INT() != nullptr;
-    if (context->funcFParams()) {
-      for (auto *parameter : context->funcFParams()->funcFParam()) {
+    result->exported = context->EXPORT() != nullptr;
+    if (context->genericParams())
+      for (auto *parameter : context->genericParams()->IDENT())
+        result->genericParameters.push_back(parameter->getText());
+    auto *expression = context->functionExpression();
+    if (expression->parameters()) {
+      for (auto *parameter : expression->parameters()->parameter()) {
         mioyi::Parameter item;
         item.location = location(parameter);
         item.name = parameter->IDENT()->getText();
-        item.array = !parameter->LBRACK().empty();
-        for (auto *dimension : parameter->constExp())
-          item.dimensions.push_back(buildAdd(dimension->addExp()));
+        item.type = buildType(parameter->typeRef());
         result->parameters.push_back(std::move(item));
       }
     }
-    result->body = buildBlock(context->block());
+    if (expression->typeRef())
+      result->returnType = buildType(expression->typeRef());
+    result->body = std::make_unique<mioyi::Statement>();
+    result->body->kind = mioyi::Statement::Kind::Block;
+    result->body->location = location(expression);
+    for (auto *item : expression->functionItem()) {
+      if (item->declaration())
+        result->body->block.push_back(
+            declarationStatement(item->declaration()));
+      else
+        result->body->block.push_back(buildStatement(item->statement()));
+    }
     return result;
   }
 };
@@ -417,7 +631,8 @@ export std::unique_ptr<mioyi::Ast> parseSource(std::string_view source) {
   parser.removeErrorListeners();
   parser.addErrorListener(&errors);
   auto *tree = parser.program();
-  if (errors.failed) return nullptr;
+  if (errors.failed)
+    return nullptr;
   try {
     return AstBuilder{}.build(tree);
   } catch (const std::exception &error) {

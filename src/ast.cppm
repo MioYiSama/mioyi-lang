@@ -28,6 +28,15 @@ Json convert(mioyi::SourceLocation value) {
   return result;
 }
 
+Json convert(const mioyi::TypeRef &value) {
+  Json result = object();
+  result["location"] = convert(value.location);
+  result["name"] = value.name;
+  if (value.element)
+    result["element"] = convert(*value.element);
+  return result;
+}
+
 Json convert(const mioyi::Expression &value) {
   Json result = object();
   result["location"] = convert(value.location);
@@ -36,14 +45,40 @@ Json convert(const mioyi::Expression &value) {
   case Kind::Integer:
     result["kind"] = "integer";
     result["value"] = value.integer;
+    result["type"] = value.text;
+    break;
+  case Kind::Floating:
+    result["kind"] = "floating";
+    result["value"] = value.floating;
+    result["type"] = value.text;
+    break;
+  case Kind::String:
+    result["kind"] = "string";
+    result["value"] = value.text;
+    break;
+  case Kind::Character:
+    result["kind"] = "character";
+    result["value"] = value.integer;
+    break;
+  case Kind::Boolean:
+    result["kind"] = "boolean";
+    result["value"] = value.boolean;
+    break;
+  case Kind::Void:
+    result["kind"] = "void";
     break;
   case Kind::LValue:
     result["kind"] = "lvalue";
     result["name"] = value.text;
     break;
+  case Kind::Array:
+    result["kind"] = "array";
+    break;
   case Kind::Call:
     result["kind"] = "call";
-    result["name"] = value.text;
+    break;
+  case Kind::Index:
+    result["kind"] = "index";
     break;
   case Kind::Unary:
     result["kind"] = "unary";
@@ -62,35 +97,31 @@ Json convert(const mioyi::Expression &value) {
   return result;
 }
 
-Json convert(const mioyi::Initializer &value) {
-  Json result = object();
-  result["location"] = convert(value.location);
-  if (value.expression)
-    result["expression"] = convert(*value.expression);
-  if (!value.elements.empty()) {
-    result["elements"] = array();
-    for (const auto &element : value.elements)
-      result["elements"].get_array().push_back(convert(*element));
+const char *bindingKind(mioyi::BindingKind kind) {
+  switch (kind) {
+  case mioyi::BindingKind::Variable:
+    return "var";
+  case mioyi::BindingKind::Value:
+    return "val";
+  case mioyi::BindingKind::Definition:
+    return "def";
   }
-  return result;
+  return "unknown";
 }
 
 Json convert(const mioyi::Declaration &value) {
   Json result = object();
-  result["constant"] = value.constant;
-  result["definitions"] = array();
-  for (const auto &definition : value.definitions) {
+  result["bindingKind"] = bindingKind(value.kind);
+  result["exported"] = value.exported;
+  result["bindings"] = array();
+  for (const auto &binding : value.bindings) {
     Json item = object();
-    item["location"] = convert(definition.location);
-    item["name"] = definition.name;
-    if (!definition.dimensions.empty()) {
-      item["dimensions"] = array();
-      for (const auto &dimension : definition.dimensions)
-        item["dimensions"].get_array().push_back(convert(*dimension));
-    }
-    if (definition.initializer)
-      item["initializer"] = convert(*definition.initializer);
-    result["definitions"].get_array().push_back(std::move(item));
+    item["location"] = convert(binding.location);
+    item["name"] = binding.name;
+    if (binding.type)
+      item["type"] = convert(*binding.type);
+    item["initializer"] = convert(*binding.initializer);
+    result["bindings"].get_array().push_back(std::move(item));
   }
   return result;
 }
@@ -105,6 +136,7 @@ Json convert(const mioyi::Statement &value) {
     break;
   case Kind::Assignment:
     result["kind"] = "assignment";
+    result["operator"] = value.text;
     break;
   case Kind::Expression:
     result["kind"] = "expression";
@@ -115,8 +147,12 @@ Json convert(const mioyi::Statement &value) {
   case Kind::If:
     result["kind"] = "if";
     break;
-  case Kind::While:
-    result["kind"] = "while";
+  case Kind::For:
+    result["kind"] = "for";
+    break;
+  case Kind::ForEach:
+    result["kind"] = "forEach";
+    result["binding"] = value.text;
     break;
   case Kind::Break:
     result["kind"] = "break";
@@ -150,20 +186,20 @@ Json convert(const mioyi::Function &value) {
   Json result = object();
   result["location"] = convert(value.location);
   result["name"] = value.name;
-  result["returnsValue"] = value.returnsValue;
+  result["exported"] = value.exported;
+  result["genericParameters"] = array();
+  for (const auto &parameter : value.genericParameters)
+    result["genericParameters"].get_array().push_back(parameter);
   result["parameters"] = array();
   for (const auto &parameter : value.parameters) {
     Json item = object();
     item["location"] = convert(parameter.location);
     item["name"] = parameter.name;
-    item["array"] = parameter.array;
-    if (!parameter.dimensions.empty()) {
-      item["dimensions"] = array();
-      for (const auto &dimension : parameter.dimensions)
-        item["dimensions"].get_array().push_back(convert(*dimension));
-    }
+    item["type"] = convert(*parameter.type);
     result["parameters"].get_array().push_back(std::move(item));
   }
+  if (value.returnType)
+    result["returnType"] = convert(*value.returnType);
   result["body"] = convert(*value.body);
   return result;
 }
@@ -188,11 +224,10 @@ Json convert(const mioyi::Ast &value) {
 bool serialize(const Json &ast, const std::string &format,
                std::string &output) {
   glz::error_ctx error;
-  if (format == "yaml") {
+  if (format == "yaml")
     error = glz::write_yaml(ast, output);
-  } else {
+  else
     error = glz::write<glz::opts{.prettify = true}>(ast, output);
-  }
   if (!error)
     return true;
   std::cerr << "error: failed to serialize AST: "
@@ -233,9 +268,5 @@ export int dumpAst(const CompilerOptions &options) {
     return 1;
   }
   outputFile << output;
-  if (!outputFile) {
-    std::cerr << "error: cannot write output file '" << options.output << "'\n";
-    return 1;
-  }
-  return 0;
+  return outputFile ? 0 : 1;
 }

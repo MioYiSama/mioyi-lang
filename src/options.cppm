@@ -34,7 +34,8 @@ void finalizeOptions(CompilerOptions &options,
     }
     return;
   }
-  if (!positionalOutput.empty()) options.output = positionalOutput;
+  if (!positionalOutput.empty())
+    options.output = positionalOutput;
   if (!options.output.empty() &&
       std::filesystem::path(options.output).extension() == ".ll")
     options.emitLLVM = true;
@@ -62,7 +63,8 @@ void finalizeOptions(CompilerOptions &options,
       path.replace_extension(".exe");
 #else
       path.replace_extension();
-      if (path == std::filesystem::path(options.input)) path += ".out";
+      if (path == std::filesystem::path(options.input))
+        path += ".out";
 #endif
       options.output = path.string();
     }
@@ -72,14 +74,16 @@ void finalizeOptions(CompilerOptions &options,
 } // namespace
 
 export int parseOptions(int argc, char **argv, CompilerOptions &options) {
-  CLI::App app{"Compile and link a SysY program"};
+  CLI::App app{"Compile and link a Mioyi program"};
   std::string positionalOutput;
-  app.add_option("input", options.input, "Input SysY source (stdin if omitted)");
+  app.add_option("input", options.input,
+                 "Input .mioyi source (stdin if omitted)");
   auto *positionalOutputOption = app.add_option(
       "output", positionalOutput, "Output file (legacy positional form)");
   auto *outputOption = app.add_option("-o", options.output, "Output file");
   outputOption->excludes(positionalOutputOption);
-  app.add_flag("-c", options.compileOnly, "Emit an object file without linking");
+  app.add_flag("-c", options.compileOnly,
+               "Emit an object file without linking");
   app.add_flag("-S,--emit-llvm", options.emitLLVM, "Emit LLVM IR");
   app.add_option("-O", options.optimization, "Optimization level")
       ->check(CLI::Range(0u, 3u))
@@ -88,7 +92,7 @@ export int parseOptions(int argc, char **argv, CompilerOptions &options) {
   auto *ast = app.add_subcommand("ast", "Serialize the parsed AST");
   ast->callback([&options] { options.command = Command::Ast; });
   ast->add_option("input", options.input,
-                  "Input SysY source (stdin if omitted)");
+                  "Input .mioyi source (stdin if omitted)");
   ast->add_option("-o,--output", options.output,
                   "Output file (stdout if omitted)");
   ast->add_option("-f,--format", options.astFormat, "Output format")
